@@ -15,7 +15,7 @@ const save = (k, v) => { try { localStorage.setItem("hz." + k, JSON.stringify(v)
 
 const PRESETS = [
   { name: "Aiguille du Midi, above Chamonix (the Alps)", lat: 45.8786, lon: 6.8873, az: 200, ground: 3777 },  // the terrace: the tiles blur the needle lower
-  { name: "Citadelle de Namur", lat: 50.4547, lon: 4.8548, az: 45 },
+  { name: "Citadelle de Namur", lat: 50.4600, lon: 4.8594, az: 45 },
   { name: "Signal de Botrange, Belgium's highest point", lat: 50.5013, lon: 6.0939, az: 250 },
   { name: "Ciney", lat: 50.2969, lon: 5.1006, az: 0 },
 ];
@@ -62,12 +62,12 @@ function hpx(G, gx, gy) {
   const t = G.tiles[ty * G.w + tx];
   return t ? t[((gy & 255) << 8) | (gx & 255)] : NaN;
 }
-function elevAt(lat, lon) {  // metres above sea level, from the sharpest tiles that cover the spot, between the four nearest pixels
-  for (const G of GRIDS) {
-    const [tx, ty] = tileXY(lat, lon, G.z), gx = tx * 256 - 0.5, gy = ty * 256 - 0.5, x0 = Math.floor(gx), y0 = Math.floor(gy), fx = gx - x0, fy = gy - y0;
-    const v = hpx(G, x0, y0) * (1 - fx) * (1 - fy) + hpx(G, x0 + 1, y0) * fx * (1 - fy) + hpx(G, x0, y0 + 1) * (1 - fx) * fy + hpx(G, x0 + 1, y0 + 1) * fx * fy;
-    if (!Number.isNaN(v)) return v;
-  }
+function sample(G, lat, lon) {  // one set of tiles, between the four nearest pixels (NaN outside it)
+  const [tx, ty] = tileXY(lat, lon, G.z), gx = tx * 256 - 0.5, gy = ty * 256 - 0.5, x0 = Math.floor(gx), y0 = Math.floor(gy), fx = gx - x0, fy = gy - y0;
+  return hpx(G, x0, y0) * (1 - fx) * (1 - fy) + hpx(G, x0 + 1, y0) * fx * (1 - fy) + hpx(G, x0, y0 + 1) * (1 - fx) * fy + hpx(G, x0 + 1, y0 + 1) * fx * fy;
+}
+function elevAt(lat, lon) {  // metres above sea level, from the sharpest tiles that cover the spot
+  for (const G of GRIDS) { const v = sample(G, lat, lon); if (!Number.isNaN(v)) return v; }
   return 0;
 }
 
@@ -103,32 +103,37 @@ function blockedAt(d, az, h) {  // null when the place is in sight; otherwise ho
 
 // ---- places, from OpenStreetMap ----
 const KINDS = {  // kind: [label, default height (m), priority, how far to look (m)]
-  city: ["City", 25, 1, 45000], town: ["Town", 15, 2, 45000], peak: ["Hill", 0, 3, 45000], tower: ["Tower", 60, 4, 35000],
-  castle: ["Castle", 20, 6, 12000], village: ["Village", 10, 5, 12000], turbine: ["Wind turbine", 150, 7, 25000],
+  city: ["City", 25, 1, 30000], town: ["Town", 15, 2, 30000], peak: ["Hill", 0, 3, 25000], tower: ["Tower", 60, 4, 25000],
+  castle: ["Castle", 20, 6, 10000], village: ["Village", 10, 5, 10000], turbine: ["Wind turbine", 150, 7, 20000],
 };
-function overpassQuery() {
-  const a = (r) => `(around:${r},${S.lat.toFixed(4)},${S.lon.toFixed(4)})`;
-  return `[out:json][timeout:25];(node["place"~"^(city|town)$"]["name"]${a(45000)};node["place"="village"]["name"]${a(12000)};` +
-    `node["natural"="peak"]["name"]${a(45000)};nwr["man_made"~"^(tower|mast)$"]["name"]${a(35000)};nwr["man_made"="mast"]["height"]${a(25000)};` +
-    `node["power"="generator"]["generator:source"="wind"]${a(25000)};nwr["historic"~"^(castle|fort)$"]["name"]${a(12000)};);out center tags;`;
+// places are fetched by squares of the map (0.1°, about 11 × 7 km here), each with a margin as wide as the farthest
+// kind: anywhere in a square, one answer covers what's around you, and nearby viewpoints share it
+const CELL = 0.1;
+function cellOf(lat, lon) { return [Math.floor(lat / CELL), Math.floor(lon / CELL)]; }
+function overpassQuery([cy, cx]) {
+  // a box per kind: the square, widened by how far that kind is looked for (boxes are cheaper for the server than circles)
+  const s0 = cy * CELL, w0 = cx * CELL, mid = (s0 + CELL / 2) * D2R;
+  const box = (r) => { const dl = (r / RE) * R2D, dn = dl / Math.cos(mid); return `(${(s0 - dl).toFixed(4)},${(w0 - dn).toFixed(4)},${(s0 + CELL + dl).toFixed(4)},${(w0 + CELL + dn).toFixed(4)})`; };
+  const k = (kind) => box(KINDS[kind][3]);
+  return `[out:json][timeout:25];(node["place"~"^(city|town)$"]["name"]${k("town")};node["place"="village"]["name"]${k("village")};` +
+    `node["natural"="peak"]["name"]${k("peak")};nwr["man_made"~"^(tower|mast)$"]["name"]${k("tower")};nwr["man_made"="mast"]["height"]${k("tower")};` +
+    `node["power"="generator"]["generator:source"="wind"]${k("turbine")};nwr["historic"~"^(castle|fort)$"]["name"]${k("castle")};);out center tags;`;
 }
 async function places() {
-  const key = `places.${S.lat.toFixed(2)},${S.lon.toFixed(2)}`, cached = load(key, null);
+  const cell = cellOf(S.lat, S.lon), key = `places.${cell.join(",")}`, cached = load(key, null);
   if (cached && Date.now() - cached.at < 7 * 864e5) return cached.elements;  // a week: places don't move
-  // the public servers fill up at busy times: try each, then wait and go round once more
+  // the public servers fill up at busy times: one try each, then a single retry of the main one after a proper pause
   const servers = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter", "https://overpass.private.coffee/api/interpreter"];
   let lastError;
-  for (let round = 0; round < 2; round++) {
-    if (round) await new Promise((r) => setTimeout(r, 4000));
-    for (const url of servers) {
-      try {
-        const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 25000);  // a busy server can hold a request for minutes
-        const r = await fetch(url, { method: "POST", body: new URLSearchParams({ data: overpassQuery() }), signal: ctl.signal }).finally(() => clearTimeout(timer));
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        const elements = (await r.json()).elements;
-        save(key, { at: Date.now(), elements }); return elements;
-      } catch (e) { lastError = e; }
-    }
+  for (const [i, url] of [...servers, servers[0]].entries()) {
+    if (i === servers.length) await new Promise((r) => setTimeout(r, 15000));
+    try {
+      const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 25000);  // a busy server can hold a request for minutes
+      const r = await fetch(url, { method: "POST", body: new URLSearchParams({ data: overpassQuery(cell) }), signal: ctl.signal }).finally(() => clearTimeout(timer));
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const elements = (await r.json()).elements;
+      save(key, { at: Date.now(), elements }); return elements;
+    } catch (e) { lastError = e; }
   }
   if (cached) return cached.elements;
   throw lastError;
@@ -187,7 +192,24 @@ function rethink() {  // after a change of eye height: the same terrain and plac
   if (!GRIDS.length) return;
   S.hv = S.ground + S.eye; horizon();
   for (const p of S.pois) { p.alt = angleTo(p.d, p.top) * R2D; p.blocked = blockedAt(p.d, p.az, p.top); }
-  showPlace();
+  layRoute(); routeBanner(); showPlace();
+}
+// on the move (camera mode): every 25 m, see the world from where you now stand
+function moveTo(lat, lon) {
+  if (!S.ready || !GRIDS.length) return;
+  S.lat = lat; S.lon = lon; S.ground = elevAt(lat, lon);
+  const cl = Math.cos(lat * D2R);
+  for (const p of S.pois) { const dy = (p.lat - lat) * D2R * RE, dx = (p.lon - lon) * D2R * RE * cl; p.d = Math.hypot(dx, dy); p.az = (Math.atan2(dx, dy) * R2D + 360) % 360; }
+  rethink();
+}
+let lastFix = null;
+function follow() {
+  navigator.geolocation?.watchPosition((pos) => {
+    const here = [pos.coords.latitude, pos.coords.longitude];
+    if (pos.coords.accuracy > 60) return;  // a poor fix would shake the whole view
+    if (lastFix && metres(lastFix, here) < 25) return;
+    lastFix = here; moveTo(...here);
+  }, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
 }
 function showPlace() {
   const vis = S.pois.filter((p) => p.blocked == null).length;
@@ -256,6 +278,7 @@ function draw() {
   g.setTransform(DPR, 0, 0, DPR, 0, 0); g.clearRect(0, 0, W, H);
   if (S.camera) skylineLine(V); else panorama(V);
   compassTape(V);
+  drawRoute(V);
   drawPois(V);
   const [alt, az] = vecAltAz(V.back.map((v) => -v));
   $("#looking").textContent = `${DIRS[Math.round(az / 45) % 8]} ${Math.round(az)}° · ${alt >= 0 ? "up" : "down"} ${Math.abs(Math.round(alt))}°`;
@@ -338,6 +361,105 @@ function drawPois(V) {
   }
 }
 
+// ---- itineraries: a route to a place you pick, laid on the terrain ----
+// routes from the OpenStreetMap routing servers (FOSSGIS, OSRM): fine for light use, which a person tapping is
+const MODES = { walk: ["Walk", "routed-foot", "foot", "#62d68f"], bike: ["Cycle", "routed-bike", "bike", "#5ab8ff"], car: ["Drive", "routed-car", "driving", "#ff9d57"] };
+async function routeTo(p, mode) {
+  const [label, server, profile] = MODES[mode];
+  toast(`${label === "Drive" ? "Driving" : label === "Cycle" ? "Cycling" : "Walking"} route to ${p.name}…`);
+  try {
+    const url = `https://routing.openstreetmap.de/${server}/route/v1/${profile}/${S.lon.toFixed(5)},${S.lat.toFixed(5)};${p.lon.toFixed(5)},${p.lat.toFixed(5)}?overview=full&geometries=geojson`;
+    const r = await fetch(url), j = await r.json();
+    if (!r.ok || !j.routes?.length) throw new Error(j.message || "no route");
+    const rt = j.routes[0], line = rt.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+    await terrainFor(line);
+    S.route = { mode, dest: p.name, dist: rt.distance, time: rt.duration, line: densify(line, 25) };
+    S.route.cum = [0]; for (let i = 1; i < S.route.line.length; i++) S.route.cum.push(S.route.cum[i - 1] + metres(S.route.line[i - 1], S.route.line[i]));
+    S.route.ascent = ascent(S.route.line);
+    layRoute(); routeBanner(); $("#card").hidden = true; document.querySelector(".toast")?.remove();
+  } catch (e) { toast(`No ${label.toLowerCase()} route found to ${p.name}.`); }
+}
+const metres = (a, b) => { const cl = Math.cos(a[0] * D2R); return Math.hypot((b[0] - a[0]) * D2R * RE, (b[1] - a[1]) * D2R * RE * cl); };
+function densify(line, max) {  // points every 25 m or less, so the line follows the ground between the router's corners
+  const out = [line[0]];
+  for (let i = 1; i < line.length; i++) {
+    const a = line[i - 1], b = line[i], n = Math.ceil(metres(a, b) / max);
+    for (let k = 1; k <= n; k++) out.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]);
+  }
+  return out;
+}
+function ascent(line) {  // the climbing, from the terrain, smoothed over 100 m so the tiles' noise doesn't add up
+  let up = 0, prev = null;
+  for (let i = 0; i < line.length; i += 4) { const h = elevAt(line[i][0], line[i][1]); if (prev != null && h > prev) up += h - prev; prev = h; }
+  return up;
+}
+async function terrainFor(line) {
+  // a route can leave the 40 km of terrain already loaded: fetch the coarse tiles that cover the rest of it
+  const out = line.filter(([la, lo]) => Number.isNaN(GRIDS.reduce((v, G) => (Number.isNaN(v) ? sample(G, la, lo) : v), NaN)));
+  if (!out.length) return;
+  const lats = out.map((q) => q[0]), lons = out.map((q) => q[1]), z = 10;
+  const [x0, y0] = tileXY(Math.max(...lats) + 0.01, Math.min(...lons) - 0.01, z).map(Math.floor), [x1, y1] = tileXY(Math.min(...lats) - 0.01, Math.max(...lons) + 0.01, z).map(Math.floor);
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 64) return;  // a very long route: the far part lies flat rather than download half a country
+  const grid = { z, x0, y0, w: x1 - x0 + 1, h: y1 - y0 + 1, tiles: [] }, jobs = [];
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const i = (y - y0) * grid.w + (x - x0); jobs.push(tile(z, x, y).then((h) => (grid.tiles[i] = h)).catch(() => (grid.tiles[i] = null))); }
+  await Promise.all(jobs); GRIDS.push(grid);
+}
+function layRoute() {  // where each point of the route is from your eye, and whether you can see it
+  const R = S.route; if (!R) return;
+  const cl = Math.cos(S.lat * D2R);
+  R.pts = R.line.map(([la, lo], i) => {
+    const dy = (la - S.lat) * D2R * RE, dx = (lo - S.lon) * D2R * RE * cl, d = Math.max(1, Math.hypot(dx, dy)), az = (Math.atan2(dx, dy) * R2D + 360) % 360;
+    const top = elevAt(la, lo) + 1.5;  // a little above the ground, like a line painted on the path
+    return { enu: altAzVec(angleTo(d, top) * R2D, az), seen: d < NEAR || blockedAt(d, az, top) == null, cum: R.cum[i], d };
+  });
+  // how far along you are: the route point nearest to you
+  let best = 0, bd = Infinity; R.pts.forEach((q, i) => { if (q.d < bd) { bd = q.d; best = i; } });
+  R.here = best; R.off = bd;
+}
+function routeBanner() {
+  const R = S.route, b = $("#route");
+  if (!R) { b.hidden = true; return; }
+  const left = R.dist - (R.cum[R.here] || 0), mins = Math.round((R.time * left / R.dist) / 60);
+  const t = mins >= 60 ? `${Math.floor(mins / 60)} h ${String(mins % 60).padStart(2, "0")}` : `${mins} min`;
+  b.querySelector("span").textContent = `${MODES[R.mode][0] === "Drive" ? "Driving" : MODES[R.mode][0] === "Cycle" ? "Cycling" : "Walking"} to ${R.dest} · ${km(left)} · ${t} · ↑ ${Math.round(R.ascent)} m${R.off > 150 ? ` · the route starts ${km(R.off)} away` : ""}`;
+  b.style.borderColor = MODES[R.mode][3]; b.hidden = false;
+}
+function drawRoute(V) {
+  const R = S.route; if (!R?.pts) return;
+  const color = MODES[R.mode][3];
+  g.lineCap = "round"; g.lineJoin = "round";
+  for (let pass = 0; pass < 2; pass++) {  // a dark edge under the colour, so it reads on any background
+    for (let i = Math.max(1, R.here); i < R.pts.length; i++) {
+      const a = R.pts[i - 1], b = R.pts[i];
+      if (-dot(a.enu, V.back) < 0.3 || -dot(b.enu, V.back) < 0.3) continue;  // nearly beside you: it would smear across the screen
+      const pa = project(V, a.enu), pb = project(V, b.enu);
+      if (!pa || !pb || (!onScreen(pa, 100) && !onScreen(pb, 100)) || Math.hypot(pa[0] - pb[0], pa[1] - pb[1]) > W) continue;
+      const w = Math.max(2, Math.min(9, 9 * 250 / b.d)), seen = a.seen && b.seen;  // nearer is wider
+      g.setLineDash(seen ? [] : [4, 6]);
+      g.strokeStyle = pass ? (seen ? color : "rgba(255,255,255,.55)") : "rgba(0,0,0,.45)"; g.lineWidth = pass ? w : w + 3;
+      if (!pass && !seen) continue;
+      g.beginPath(); g.moveTo(pa[0], pa[1]); g.lineTo(pb[0], pb[1]); g.stroke();
+    }
+  }
+  g.setLineDash([]);
+  // a marker every kilometre, and a flag at the end
+  g.font = "600 12px ui-sans-serif, system-ui, sans-serif"; g.textAlign = "center";
+  let next = Math.ceil(((R.cum[R.here] || 0) + 1) / 1000) * 1000;
+  const marks = [];  // where labels already are: far away, kilometres bunch up
+  for (let i = R.here; i < R.pts.length; i++) {
+    const q = R.pts[i], last = i === R.pts.length - 1;
+    if (q.cum < next && !last) continue;
+    if (!last) next += 1000;
+    const pt = project(V, q.enu); if (!onScreen(pt) || -dot(q.enu, V.back) < 0.3) continue;
+    if (!last && marks.some((m) => Math.abs(m[0] - pt[0]) < 56 && Math.abs(m[1] - pt[1]) < 18)) continue;
+    marks.push(pt);
+    g.globalAlpha = q.seen ? 1 : 0.5; g.fillStyle = last ? "#fff" : color;
+    g.beginPath(); g.arc(pt[0], pt[1], last ? 6 : 4.5, 0, 7); g.fill(); g.strokeStyle = "rgba(0,0,0,.5)"; g.lineWidth = 1.5; g.stroke();
+    g.fillStyle = "#fff"; g.fillText(last ? `${R.dest} 🏁` : km(q.cum - (R.cum[R.here] || 0)), pt[0], pt[1] - 10);
+    g.globalAlpha = 1;
+  }
+}
+
 // ---- touch ----
 const pointers = new Map(); let dragged = 0, pinch = null;
 canvas.addEventListener("pointerdown", (e) => { canvas.setPointerCapture(e.pointerId); pointers.set(e.pointerId, [e.clientX, e.clientY]); dragged = 0;
@@ -370,6 +492,9 @@ function tap(x, y) {
   const wiki = (t.wikipedia || "").match(/^([a-z-]+):(.+)$/);
   const link = h("a", { href: wiki ? `https://${wiki[1]}.wikipedia.org/wiki/${encodeURIComponent(wiki[2].replace(/ /g, "_"))}` : `https://www.openstreetmap.org/${best.osm}`, target: "_blank", rel: "noopener", textContent: wiki ? "Read about it on Wikipedia" : "See it on OpenStreetMap" });
   const more = h("p", { style: "margin:10px 0 0;font-size:14px" }); more.append(link); c.append(more);
+  const go = h("div", { className: "go" });
+  for (const [mode, [label]] of Object.entries(MODES)) go.append(h("button", { className: "btn ghost", textContent: label, onclick: () => routeTo(best, mode) }));
+  c.append(go);
   c.hidden = false;
 }
 
@@ -389,6 +514,7 @@ async function startCamera() {
   });
   if (!where) toast("Couldn't get your location: showing Ciney.");
   await begin(where ? where.latitude : 50.2969, where ? where.longitude : 5.1006, where ? "" : "Ciney");
+  if (where) { lastFix = [where.latitude, where.longitude]; follow(); }
   setTimeout(() => { if (!S.target) { S.mode = "drag"; toast("No motion sensors here: drag to look around."); } }, 1500);
 }
 async function startPreset(p) { $("#start").hidden = true; S.view.az = p.az; await begin(p.lat, p.lon, p.name.split(",")[0], p.ground); }
@@ -403,6 +529,7 @@ function toast(t, onTap) {
 }
 
 $("#go-camera").addEventListener("click", startCamera);
+$("#route-clear").addEventListener("click", () => { S.route = null; routeBanner(); });
 $("#presets").replaceChildren(...PRESETS.map((p) => Object.assign(document.createElement("button"), { className: "btn ghost", textContent: p.name, onclick: () => startPreset(p) })));
 $("#menu").addEventListener("click", (e) => { const s = $("#sheet"); s.hidden = !s.hidden; e.currentTarget.setAttribute("aria-pressed", String(!s.hidden)); $("#fov").value = Math.round(S.camFov); $("#eye").value = Math.round(S.eye); eyeNote(); });
 $("#align").addEventListener("click", () => {
