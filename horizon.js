@@ -199,7 +199,7 @@ function moveTo(lat, lon) {
   if (!S.ready || !GRIDS.length) return;
   S.lat = lat; S.lon = lon; S.ground = elevAt(lat, lon);
   const cl = Math.cos(lat * D2R);
-  for (const p of S.pois) { const dy = (p.lat - lat) * D2R * RE, dx = (p.lon - lon) * D2R * RE * cl; p.d = Math.hypot(dx, dy); p.az = (Math.atan2(dx, dy) * R2D + 360) % 360; }
+  for (const p of [...S.pois, ...(S.dest ? [S.dest] : [])]) { const dy = (p.lat - lat) * D2R * RE, dx = (p.lon - lon) * D2R * RE * cl; p.d = Math.hypot(dx, dy); p.az = (Math.atan2(dx, dy) * R2D + 360) % 360; }
   rethink();
 }
 let lastFix = null;
@@ -280,6 +280,7 @@ function draw() {
   compassTape(V);
   drawRoute(V);
   drawPois(V);
+  drawDest(V);
   const [alt, az] = vecAltAz(V.back.map((v) => -v));
   $("#looking").textContent = `${DIRS[Math.round(az / 45) % 8]} ${Math.round(az)}° · ${alt >= 0 ? "up" : "down"} ${Math.abs(Math.round(alt))}°`;
 }
@@ -373,17 +374,18 @@ async function routeTo(p, mode) {
     if (!r.ok || !j.routes?.length) throw new Error(j.message || "no route");
     const rt = j.routes[0], line = rt.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
     await terrainFor(line);
-    S.route = { mode, dest: p.name, dist: rt.distance, time: rt.duration, line: densify(line, 25) };
+    S.route = { mode, dest: p.name, dist: rt.distance, time: rt.duration, line: densify(line) };
     S.route.cum = [0]; for (let i = 1; i < S.route.line.length; i++) S.route.cum.push(S.route.cum[i - 1] + metres(S.route.line[i - 1], S.route.line[i]));
     S.route.ascent = ascent(S.route.line);
+    S.dest = p.kind === "search" ? p : null;  // a searched place keeps its pin; a tapped one has its label
     layRoute(); routeBanner(); $("#card").hidden = true; document.querySelector(".toast")?.remove();
   } catch (e) { toast(`No ${label.toLowerCase()} route found to ${p.name}.`); }
 }
 const metres = (a, b) => { const cl = Math.cos(a[0] * D2R); return Math.hypot((b[0] - a[0]) * D2R * RE, (b[1] - a[1]) * D2R * RE * cl); };
-function densify(line, max) {  // points every 25 m or less, so the line follows the ground between the router's corners
+function densify(line) {  // points every 25 m or less within the terrain, so the line follows the ground; far away the router's corners do
   const out = [line[0]];
   for (let i = 1; i < line.length; i++) {
-    const a = line[i - 1], b = line[i], n = Math.ceil(metres(a, b) / max);
+    const a = line[i - 1], b = line[i], near = metres([S.lat, S.lon], a) < RADIUS, n = near ? Math.ceil(metres(a, b) / 25) : 1;
     for (let k = 1; k <= n; k++) out.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]);
   }
   return out;
@@ -410,7 +412,8 @@ function layRoute() {  // where each point of the route is from your eye, and wh
   R.pts = R.line.map(([la, lo], i) => {
     const dy = (la - S.lat) * D2R * RE, dx = (lo - S.lon) * D2R * RE * cl, d = Math.max(1, Math.hypot(dx, dy)), az = (Math.atan2(dx, dy) * R2D + 360) % 360;
     const top = elevAt(la, lo) + 1.5;  // a little above the ground, like a line painted on the path
-    return { enu: altAzVec(angleTo(d, top) * R2D, az), seen: d < NEAR || blockedAt(d, az, top) == null, cum: R.cum[i], d };
+    // past the terrain the Earth's curve hides the route anyway: no line of sight to work out
+    return { enu: altAzVec(angleTo(d, top) * R2D, az), seen: d < NEAR || (d < RADIUS && blockedAt(d, az, top) == null), cum: R.cum[i], d };
   });
   // how far along you are: the route point nearest to you
   let best = 0, bd = Infinity; R.pts.forEach((q, i) => { if (q.d < bd) { bd = q.d; best = i; } });
@@ -458,6 +461,64 @@ function drawRoute(V) {
     g.fillStyle = "#fff"; g.fillText(last ? `${R.dest} 🏁` : km(q.cum - (R.cum[R.here] || 0)), pt[0], pt[1] - 10);
     g.globalAlpha = 1;
   }
+}
+
+// ---- search: any place, anywhere (Photon, an OpenStreetMap search made for typing as you go) ----
+let searchTimer = null, searchSeq = 0;
+function placeFrom(f) {
+  const pr = f.properties, [lon, lat] = f.geometry.coordinates;
+  const where = [pr.city !== pr.name ? pr.city : null, pr.county && !pr.city ? pr.county : null, pr.country].filter(Boolean).join(", ");
+  return { name: pr.name || pr.street || "Somewhere", where, lat, lon, kind: "search", tags: {} };
+}
+async function search(q) {
+  const seq = ++searchSeq;
+  if (q.trim().length < 2) { $("#results").replaceChildren(); return; }
+  try {
+    const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&lat=${S.lat.toFixed(3)}&lon=${S.lon.toFixed(3)}&limit=7`);
+    const found = (await r.json()).features.map(placeFrom);
+    if (seq !== searchSeq) return;  // a newer search has started
+    $("#results").replaceChildren(...found.map((pl) => {
+      const b = document.createElement("button"), d = metres([S.lat, S.lon], [pl.lat, pl.lon]);
+      b.innerHTML = "<b></b><span></span>"; b.querySelector("b").textContent = pl.name; b.querySelector("span").textContent = `${pl.where ? pl.where + " · " : ""}${km(d)}`;
+      b.onclick = () => { $("#searchbox").hidden = true; pickPlace(pl); };
+      return b;
+    }));
+    if (!found.length) $("#results").innerHTML = '<p class="none">Nothing by that name.</p>';
+  } catch (e) { if (seq === searchSeq) $("#results").innerHTML = '<p class="none">The search isn\'t answering. Try again in a moment.</p>'; }
+}
+function pickPlace(pl) {
+  // a place found by name, near or far: where it lies from here, then a route to it
+  const cl = Math.cos(S.lat * D2R), dy = (pl.lat - S.lat) * D2R * RE, dx = (pl.lon - S.lon) * D2R * RE * cl;
+  pl.d = metres([S.lat, S.lon], [pl.lat, pl.lon]); pl.az = (Math.atan2(dx, dy) * R2D + 360) % 360;
+  S.dest = pl;
+  if (S.mode === "drag") S.view.az = pl.az;  // without the camera, turn to face it
+  const c = $("#card"), h = (t, p = {}) => Object.assign(document.createElement(t), p);
+  c.replaceChildren(h("div", { className: "kind", textContent: "Destination" }), h("h2", { textContent: pl.name }));
+  const dl = h("dl");
+  for (const [k, v] of [["Where", pl.where], ["Distance", `${km(pl.d)} as the crow flies`], ["Direction", `${dirName(pl.az)} (${Math.round(pl.az)}°)`]]) if (v) dl.append(h("dt", { textContent: k }), h("dd", { textContent: v }));
+  c.append(dl);
+  const go = h("div", { className: "go" });
+  for (const [mode, [label]] of Object.entries(MODES)) go.append(h("button", { className: "btn ghost", textContent: label, onclick: () => routeTo(pl, mode) }));
+  c.append(go); c.hidden = false;
+}
+function drawDest(V) {
+  // the destination's direction: a pin on the skyline when it's in view, an arrow at the screen's edge when it isn't
+  const D = S.dest; if (!D) return;
+  const top = D.d < RADIUS ? Math.max(angleTo(D.d, elevAt(D.lat, D.lon) + 10) * R2D, -89) : S.skyline[Math.round(D.az * 2) % 720] * R2D;
+  const v = altAzVec(top, D.az), p = project(V, v);
+  g.fillStyle = g.strokeStyle = "#f2c46d";
+  if (onScreen(p, -20)) {
+    g.lineWidth = 2; g.beginPath(); g.moveTo(p[0], p[1]); g.lineTo(p[0], p[1] - 34); g.stroke();
+    g.beginPath(); g.arc(p[0], p[1] - 40, 7, 0, 7); g.fill();
+    g.font = "600 14px ui-sans-serif, system-ui, sans-serif"; g.textAlign = "center";
+    const t = `${D.name} · ${km(D.d)}`, w = g.measureText(t).width + 14;
+    g.fillStyle = "rgba(10,14,20,.7)"; g.beginPath(); g.roundRect(p[0] - w / 2, p[1] - 74, w, 22, 7); g.fill();
+    g.fillStyle = "#f2c46d"; g.fillText(t, p[0], p[1] - 58);
+    return;
+  }
+  const x = dot(v, V.right), y = dot(v, V.up), ang = Math.atan2(-y, x), m = 48;
+  const ex = W / 2 + Math.cos(ang) * (W / 2 - m), ey = H / 2 + Math.sin(ang) * (H / 2 - m);
+  g.save(); g.translate(ex, ey); g.rotate(ang); g.beginPath(); g.moveTo(16, 0); g.lineTo(-9, -11); g.lineTo(-3, 0); g.lineTo(-9, 11); g.closePath(); g.fill(); g.restore();
 }
 
 // ---- touch ----
@@ -529,7 +590,13 @@ function toast(t, onTap) {
 }
 
 $("#go-camera").addEventListener("click", startCamera);
-$("#route-clear").addEventListener("click", () => { S.route = null; routeBanner(); });
+$("#route-clear").addEventListener("click", () => { S.route = null; S.dest = null; routeBanner(); });
+$("#search").addEventListener("click", () => {
+  const box = $("#searchbox"); box.hidden = !box.hidden;
+  if (!box.hidden) { $("#q").value = ""; $("#results").replaceChildren(); $("#q").focus(); }
+});
+$("#q").addEventListener("input", (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => search(e.target.value), 350); });  // ask once the typing pauses
+$("#q").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#results button")?.click(); if (e.key === "Escape") $("#searchbox").hidden = true; });
 $("#presets").replaceChildren(...PRESETS.map((p) => Object.assign(document.createElement("button"), { className: "btn ghost", textContent: p.name, onclick: () => startPreset(p) })));
 $("#menu").addEventListener("click", (e) => { const s = $("#sheet"); s.hidden = !s.hidden; e.currentTarget.setAttribute("aria-pressed", String(!s.hidden)); $("#fov").value = Math.round(S.camFov); $("#eye").value = Math.round(S.eye); eyeNote(); });
 $("#align").addEventListener("click", () => {

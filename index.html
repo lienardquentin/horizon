@@ -53,6 +53,13 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
 .toast { position: fixed; left: 50%; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 8px); transform: translateX(-50%); background: var(--glass); border: .5px solid var(--hair); padding: 10px 14px; border-radius: 12px; font-size: 14px; width: max-content; max-width: 90vw; }
 .card .go { display: flex; gap: 8px; margin-top: 12px; } .card .go .btn { flex: 1; padding: 10px 8px; }
 .banner.route { top: auto; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 34px); } .banner.route .btn { padding: 6px 10px; }
+.panel { position: fixed; left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right)); top: calc(max(12px, env(safe-area-inset-top)) + 58px); max-width: 460px; margin: 0 auto;
+  background: var(--glass); border: .5px solid var(--hair); border-radius: 16px; padding: 10px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+#q { width: 100%; padding: 12px 14px; border-radius: 11px; border: .5px solid var(--hair); background: rgb(0 0 0 / .35); color: var(--ink); font: inherit; font-size: 16px; }
+#results { display: grid; margin-top: 6px; max-height: 50vh; overflow-y: auto; }
+#results button { display: grid; gap: 2px; text-align: left; padding: 10px 8px; border: 0; border-bottom: .5px solid var(--hair); background: none; color: var(--ink); font: inherit; cursor: pointer; }
+#results button:last-child { border-bottom: 0; } #results span { color: var(--dim); font-size: 13px; }
+#results .none { color: var(--dim); margin: 10px 8px; }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -63,6 +70,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
 <div class="hud">
   <div class="where"><b id="looking">–</b><span id="place">–</span></div>
   <div class="tools">
+    <button class="round" id="search" title="Find a place"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
     <button class="round" id="align" aria-pressed="false" title="Align with the real horizon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></button>
     <button class="round" id="menu" aria-pressed="false" title="Settings"><svg viewBox="0 0 24 24"><path d="M12 3 2 8l10 5 10-5-10-5z"/><path d="m2 13 10 5 10-5"/></svg></button>
   </div>
@@ -78,10 +86,14 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
   <label>Your height above the ground <input type="range" id="eye" min="0" max="200" step="1"></label>
   <label>Camera zoom <input type="range" id="fov" min="40" max="100" step="1"></label>
   <small id="eye-note"></small>
-  <small>Places and routes © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>; routes by <a href="https://routing.openstreetmap.de" target="_blank" rel="noopener">FOSSGIS routing (OSRM)</a>. Terrain: <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Terrain Tiles</a> (SRTM, EU-DEM produced using Copernicus data, and others).</small>
+  <small>Places and routes © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>; routes by <a href="https://routing.openstreetmap.de" target="_blank" rel="noopener">FOSSGIS routing (OSRM)</a>; search by <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a>. Terrain: <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Terrain Tiles</a> (SRTM, EU-DEM produced using Copernicus data, and others).</small>
 </div>
 
 <div class="card" id="card" hidden></div>
+<div class="panel" id="searchbox" hidden>
+  <input id="q" type="search" placeholder="A town, a castle, an address…" autocomplete="off" enterkeyhint="go">
+  <div id="results"></div>
+</div>
 <div class="banner route" id="route" hidden><span></span><button class="btn ghost" id="route-clear" aria-label="Clear the route">✕</button></div>
 <div id="status" hidden><span id="status-text">Reading the terrain…</span><div class="bar"><i id="status-bar"></i></div></div>
 
