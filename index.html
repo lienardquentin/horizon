@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0c1118">
+<title>Horizon</title>
+<style>
+/* Point your phone at the landscape: every hill, town, tower and wind turbine you can actually see, named.
+   Dark glass over the camera; the drawn panorama in hazy blues fading to near greens. */
+:root { color-scheme: dark; --bg: #0c1118; --ink: #f1f3f6; --dim: #a3acba; --faint: #69727f; --gold: #f2c46d; --glass: rgb(14 19 27 / .72); --hair: rgb(255 255 255 / .13); }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); font: 15px/1.4 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif; }
+#cam, #view { position: fixed; inset: 0; width: 100%; height: 100%; }
+#cam { object-fit: cover; }
+#view { touch-action: none; }
+.hud { position: fixed; left: 0; right: 0; display: flex; align-items: flex-start; gap: 10px; padding: max(12px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left)); pointer-events: none; }
+.hud > * { pointer-events: auto; }
+.where { font-size: 13px; color: var(--dim); text-shadow: 0 1px 3px #000; line-height: 1.35; }
+.where b { display: block; color: var(--ink); font-size: 17px; font-weight: 600; }
+.tools { margin-left: auto; display: flex; gap: 8px; }
+.round { width: 44px; height: 44px; border-radius: 50%; border: .5px solid var(--hair); background: var(--glass); color: var(--ink); display: grid; place-items: center; cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.round svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.round[aria-pressed="true"] { color: var(--gold); border-color: var(--gold); }
+.card { position: fixed; left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); max-width: 460px; margin: 0 auto;
+  background: var(--glass); border: .5px solid var(--hair); border-radius: 18px; padding: 14px 16px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.card h2 { margin: 0; font-size: 20px; font-weight: 600; }
+.card .kind { color: var(--gold); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 2px; }
+.card dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin: 10px 0 0; font-size: 14px; }
+.card dt { color: var(--dim); } .card dd { margin: 0; font-variant-numeric: tabular-nums; }
+.card a { color: var(--gold); }
+.banner { position: fixed; left: 50%; top: calc(max(12px, env(safe-area-inset-top)) + 64px); transform: translateX(-50%); width: min(92vw, 420px); background: var(--glass); border: .5px solid var(--gold);
+  border-radius: 14px; padding: 12px 14px; font-size: 14px; display: flex; gap: 12px; align-items: center; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.banner button { margin-left: auto; }
+.btn { appearance: none; border: 0; border-radius: 12px; padding: 12px 18px; font: inherit; font-weight: 600; background: var(--ink); color: var(--bg); cursor: pointer; }
+.btn.ghost { background: transparent; color: var(--ink); border: .5px solid var(--hair); }
+.sheet { position: fixed; right: max(12px, env(safe-area-inset-right)); top: calc(max(12px, env(safe-area-inset-top)) + 54px); width: min(88vw, 310px); background: var(--glass); border: .5px solid var(--hair);
+  border-radius: 16px; padding: 8px 14px 12px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); max-height: 80vh; overflow-y: auto; }
+.sheet label { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: .5px solid var(--hair); font-size: 14.5px; }
+.sheet input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--gold); }
+.sheet input[type=range] { width: 120px; accent-color: var(--gold); }
+.sheet small { color: var(--faint); display: block; font-size: 12px; margin-top: 8px; line-height: 1.4; }
+.sheet small a { color: var(--dim); }
+#start { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; overflow-y: auto; background: linear-gradient(180deg, #13202f 0%, #0c1118 55%, #101a14 100%); }
+#start .box { max-width: 380px; width: 100%; text-align: center; }
+#start h1 { font-size: 44px; font-weight: 600; margin: 0 0 6px; }
+#start p { color: var(--dim); margin: 0 0 22px; }
+#start .btn { display: block; width: 100%; margin-top: 10px; padding: 15px; }
+#start h3 { margin: 26px 0 4px; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+#start small { display: block; color: var(--faint); margin-top: 18px; font-size: 12px; }
+#status { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); background: var(--glass); border: .5px solid var(--hair); border-radius: 16px; padding: 16px 20px; min-width: 240px; text-align: center; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+#status .bar { height: 4px; border-radius: 2px; background: var(--hair); margin-top: 10px; overflow: hidden; } #status .bar i { display: block; height: 100%; width: 0; background: var(--gold); transition: width .2s; }
+.toast { position: fixed; left: 50%; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 8px); transform: translateX(-50%); background: var(--glass); border: .5px solid var(--hair); padding: 10px 14px; border-radius: 12px; font-size: 14px; width: max-content; max-width: 90vw; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted hidden></video>
+<canvas id="view"></canvas>
+
+<div class="hud">
+  <div class="where"><b id="looking">–</b><span id="place">–</span></div>
+  <div class="tools">
+    <button class="round" id="align" aria-pressed="false" title="Align with the real horizon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></button>
+    <button class="round" id="menu" aria-pressed="false" title="Settings"><svg viewBox="0 0 24 24"><path d="M12 3 2 8l10 5 10-5-10-5z"/><path d="m2 13 10 5 10-5"/></svg></button>
+  </div>
+</div>
+
+<div class="banner" id="align-banner" hidden><span>Drag sideways until the gold line sits on the real skyline.</span><button class="btn" id="align-done">Done</button></div>
+
+<div class="sheet" id="sheet" hidden>
+  <label>Places hidden behind hills <input type="checkbox" data-opt="hidden"></label>
+  <label>Villages <input type="checkbox" data-opt="villages" checked></label>
+  <label>Wind turbines <input type="checkbox" data-opt="turbines" checked></label>
+  <label>Castles <input type="checkbox" data-opt="castles" checked></label>
+  <label>Your height above the ground <input type="range" id="eye" min="0" max="200" step="1"></label>
+  <label>Camera zoom <input type="range" id="fov" min="40" max="100" step="1"></label>
+  <small id="eye-note"></small>
+  <small>Places © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>. Terrain: <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Terrain Tiles</a> (SRTM, EU-DEM produced using Copernicus data, and others).</small>
+</div>
+
+<div class="card" id="card" hidden></div>
+<div id="status" hidden><span id="status-text">Reading the terrain…</span><div class="bar"><i id="status-bar"></i></div></div>
+
+<div id="start">
+  <div class="box">
+    <h1>Horizon</h1>
+    <p>Point your phone at the landscape: every hill, town, tower and wind turbine you can actually see, named, with how far away it is.</p>
+    <button class="btn" id="go-camera">Start here, with the camera</button>
+    <h3>Or look around from</h3>
+    <div id="presets"></div>
+    <small>Uses your location and the camera; the terrain and place names are downloaded for 40 km around you.</small>
+  </div>
+</div>
+
+<script src="horizon.js"></script>
+</body>
+</html>
